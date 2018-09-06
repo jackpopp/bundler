@@ -1,3 +1,9 @@
+## Supporting node modules
+
+dependencies of that node module
+https://nodejs.org/en/blog/npm/peer-dependencies/
+
+
 ## TODO
 
 - ES Module
