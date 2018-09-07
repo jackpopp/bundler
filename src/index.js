@@ -19,9 +19,9 @@ const escodegen = require('escodegen');
 const resolvedModules = {};
 const GRAPH = {};
 
-const ENTRY_POINT = 'demo';
-const ROOT_PATH = `${process.cwd()}/${ENTRY_POINT}/`;
-const PATH = `${ROOT_PATH}a.js`;
+//const ENTRY_POINT = 'demo';
+const ROOT_PATH = `${process.cwd()}/demo/`;
+const PATH = `${ROOT_PATH}/a.js`;
 
 function cjsTemplate(id, source) {
     return `const require_${id} = (function() { 
@@ -47,8 +47,9 @@ function walkAndParse(ast, currentPath) {
     walk.simple(ast, {
         CallExpression(node) {
             let fullPath;
-            if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0]) {
+            if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
                 const modulePath = node.arguments[0].value; 
+                let currentPathRelativeToBasePath
 
                 /* 
                     this path with normalise the path to the relative directory thats being looked for
@@ -67,7 +68,12 @@ function walkAndParse(ast, currentPath) {
 
                 if ( (modulePath.startsWith('./') || modulePath.startsWith('../'))) {
                     fullPath = `${(currentPath || ROOT_PATH)}${modulePath}`;
-                    currentPathRelativeToBasePath = `${ROOT_PATH}${path.dirname(modulePath)}/`;
+                    if (fullPath.includes('node_modules')) { 
+                        // we're at a relative path within a node module
+                        currentPathRelativeToBasePath = currentPath
+                    } else {
+                        currentPathRelativeToBasePath = `${ROOT_PATH}${path.dirname(modulePath)}/`;
+                    }
                 } else {
                     const nodeModulePath = `${ROOT_PATH}node_modules/${modulePath}`;
 
@@ -92,13 +98,31 @@ function walkAndParse(ast, currentPath) {
                     if (fs.existsSync(`${nodeModulePath}.js`) && fs.lstatSync(`${nodeModulePath}.js`).isFile()) {
                         fullPath = `${nodeModulePath}.js`;
                     }
-                    currentPathRelativeToBasePath = `${path.dirname(fullPath)}/`;
+
+                    // finally if we're add a path that relative within a relative module to a node module we build the following string
+                    // we want to make sure we keep the full path reference to the node module, this is getting lost when subsequent relaitve paths
+                    // are traversed within a node module
+                    if (fullPath) {
+                        currentPathRelativeToBasePath = `${path.dirname(fullPath)}/`;
+                    }
                 }
+
+                //console.info(fullPath, currentPathRelativeToBasePath, modulePath);
 
                 let resolved
                 if (resolvedModules[fullPath]) {
                     resolved = resolvedModules[fullPath];
                 } else {
+                    // if full path is undefined then its probably a native module
+                    // ultra hack remove this
+                    // maybe use this shim
+                    // https://github.com/webpack/node-libs-browser
+                    if (fullPath === undefined) {
+                        resolved = require(modulePath).toString();
+                        resolvedModules[modulePath] = resolved;
+                        return
+                    }
+
                     resolved = fs.readFileSync(require.resolve(fullPath), 'UTF-8');
                     resolvedModules[fullPath] = resolved;
                 }
@@ -131,7 +155,7 @@ function walkAndParse(ast, currentPath) {
  * Walks the AST and parers any call expressions for require function calls
  */
 
-function parseExports(resolvedSource, currentPath, id, modulePath) {
+function parseExports(resolvedSource, currentPath, id) {
     const wrappedSource = cjsTemplate(id, resolvedSource);
     const resolvedAST = sourceToAST(wrappedSource);
     return walkAndParse(resolvedAST, currentPath);
@@ -148,7 +172,25 @@ const init = fs.readFileSync(require.resolve(PATH));
 const initalAST = sourceToAST(init);
 const parsedIntialAST = walkAndParse(initalAST);
 const code = generateCode(parsedIntialAST, GRAPH);
-fs.writeFileSync(`${__dirname}/generated.js`, code, 'UTF-8')
+// lol this need to go in the parser checking if statements and removing the block
+/*
+    visit the if statement
+    if the check is to check the node env process 
+    then check what mode we're in 
+    if any dont match the statements and we find a require call within 
+    then mark it
+*/
+const processWrapper = `
+    window.process = {
+        env: {
+            NODE_ENV: 'development'
+        }
+    };
+    process.env.NODE_ENV;`;
+
+const iffe = `(function() {${processWrapper}\n${code}}())`;
+
+fs.writeFileSync(`${__dirname}/generated.js`, iffe, 'UTF-8')
 
 
 const end = process.hrtime(start);

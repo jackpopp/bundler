@@ -1,9 +1,12 @@
 const React = require('react');
-const ReactDOM = require('react-dom/server'); //- currently doesnt work
+const ReactDOM = require('react-dom');
 const somethingElse = require('./folder/something-else.js');
 
-const el = React.createElement('a');
-console.log(el);
+const el = React.createElement('a', {
+    href: 'hello'
+}, 'This is a link');
+
+console.log(ReactDOM.render(el, document.querySelector('#el')));
 
 function helloWorld() {
     console.log('Hello World');
