@@ -104,23 +104,6 @@ function walkAndParse(ast, currentPath, resolver) {
                 const newTest = sourceToAST('true');
                 node.test = newTest.body[0].expression;
 
-                // if result is true then take the consequent and set as the node
-                // if result is false and there is a alternate set that as the body
-                // if nothing set the node as block statement
-                /*if (result === true) {
-                    console.log('consequent')
-                    node = node.consequent.body;
-                    return
-                }
-
-                if (result === false && node.alternate && node.alternate.body) {
-                    console.log('alternate');
-                    node = node.alternate.body;
-                    return
-                }
-
-                console.log('nullify');
-                node = null;*/
                 if (result === true && node.alternate && node.alternate.body) {
                     node.alternate.body = [];
                 }
