@@ -12,6 +12,7 @@
   "dependencies": {
     "acorn": "^5.7.2",
     "escodegen": "^1.11.0",
+    "estraverse": "^4.2.0",
     "md5": "^2.2.1"
   }
 }
