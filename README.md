@@ -33,7 +33,7 @@ Literals are static expressions within the source code, they are static values d
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#Literals
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#String_literals
 
-### Resolving modules
+### Resolving modules
 
 ### Wrapping and recursively parsing
 
