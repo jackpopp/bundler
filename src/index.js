@@ -1,8 +1,10 @@
 const acorn = require('acorn');
-const walk = require("acorn/dist/walk");
+const path = require('path');
+const estraverse = require('estraverse');
 const fs = require('fs');
 const md5 = require('md5');
 const escodegen = require('escodegen');
+const UglifyJS = require('uglify-es');
 
 const Resolver = require('./resolver');
 
@@ -34,89 +36,95 @@ function sourceToAST(source) {
 // root path should be where the bundler was invoked from
 // source path should be where the inital file was loaded from
 function walkAndParse(ast, currentPath, resolver) {
+
+    estraverse.replace(ast, {
+        enter(node) {
+            if (node.type === 'CallExpression') {
+                if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
+                    const modulePath = node.arguments[0].value;
+                    const { fullPath, newResolutionPath} = resolver.resolvePath(modulePath, currentPath);
     
-    walk.ancestor(ast, {
-        CallExpression(node) {
-            if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
-                const modulePath = node.arguments[0].value;
-                const { fullPath, newResolutionPath} = resolver.resolvePath(modulePath, currentPath);
- 
-                let resolved
-                if (resolvedModules[fullPath]) {
-                    resolved = resolvedModules[fullPath];
-                } else {
-                    /*
-                        if full path is undefined then its probably a native node module
-                        maybe use this shim  - https://github.com/webpack/node-libs-browser
-                        ultra hack for now, remove this
-                    */
-                    if (fullPath === undefined) {
-                        resolved = require(modulePath).toString();
-                        resolvedModules[modulePath] = resolved;
-                        return
+                    let resolved
+                    if (resolvedModules[fullPath]) {
+                        resolved = resolvedModules[fullPath];
+                    } else {
+                        /*
+                            if full path is undefined then its probably a native node module
+                            maybe use this shim  - https://github.com/webpack/node-libs-browser
+                            ultra hack for now, remove this
+                        */
+                        if (fullPath === undefined) {
+                            resolved = require(modulePath).toString();
+                            resolvedModules[modulePath] = resolved;
+                            return
+                        }
+
+                        resolved = fs.readFileSync(require.resolve(fullPath), 'UTF-8');
+                        resolvedModules[fullPath] = resolved;
                     }
 
-                    resolved = fs.readFileSync(require.resolve(fullPath), 'UTF-8');
-                    resolvedModules[fullPath] = resolved;
-                }
-
-                const id = md5(resolved);
-                const edge = {
-                    node,
-                    resolvedModule: resolved,
-                    modulePath: modulePath,
-                    fullPath: fullPath,
-                    exports: parseExports(resolved, newResolutionPath, id, resolver),
-                    id: id
-                }
-
-                node.callee.name = `require_${id}`;
-
-                if (GRAPH[id] === undefined) {
-                    GRAPH[id] = (edge);
-                }
-            }
-        },
-        IfStatement(node) { 
-            // This mod allows us to generate different bundles based on the NODE_ENV value, allowing develpoment and production builds
-            const { left, right, operator } = node.test;
-            // needs to be a binary expression
-            // check if either left or right are memeber expressions that look for the node env
-            // check if either the left or right string literal, if it is lets build and compare the two
-            if (node.test.type !== 'BinaryExpression') return;
-
-            if ((left.type === 'MemberExpression' || right.type === 'MemberExpression') && (left.type === 'Literal' || right.type === 'Literal')) {
-                const member = right.type === 'MemberExpression' ? right : left;
-                const literal = right.type === 'Literal' ? right : left;
-
-                // JS is evaulated right to left so `env` object with be acessible on the first object key, `processs` on the next, even though its coded the other way around
-                if (member.object.type !== 'MemberExpression' || member.object.object === undefined || member.object.object.name !== 'process') return;
-                if (member.object.property.name !== 'env' && member.property.name !== 'NODE_ENV') return;
-
-
-                const { value } = literal;
-                // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function
-                const result = new Function(`return "${value}" ${operator} "${process.env.NODE_ENV}"`)();
-                
-
-                // this is kinda nasty but you should have seen how I was trying to achieve this effect before 
-                // https://github.com/jackpopp/bundler/blob/master/src/index.js#L183 mega hack and both versions of the scripts we bundled but only one executed
-                const newTest = sourceToAST('true');
-                node.test = newTest.body[0].expression;
-
-                if (result === true && node.alternate && node.alternate.body) {
-                    node.alternate.body = [];
-                }
-
-                if (result === false) {
-                    if (node.alternate && node.alternate.body) {
-                        node.consequent.body = node.alternate.body;
-                        return;
+                    const id = md5(resolved);
+                    const edge = {
+                        node,
+                        resolvedModule: resolved,
+                        modulePath: modulePath,
+                        fullPath: fullPath,
+                        exports: parseExports(resolved, newResolutionPath, id, resolver),
+                        id: id
                     }
 
-                    node.consequent.body = [];
+                    node.callee.name = `require_${id}`;
+
+                    if (GRAPH[id] === undefined) {
+                        GRAPH[id] = (edge);
+                    }
                 }
             }
+
+            if (node.type === 'IfStatement') {
+                // This mod allows us to generate different bundles based on the NODE_ENV value, allowing develpoment and production builds
+                const { left, right, operator } = node.test;
+                // needs to be a binary expression
+                // check if either left or right are memeber expressions that look for the node env
+                // check if either the left or right string literal, if it is lets build and compare the two
+                if (node.test.type !== 'BinaryExpression') return;
+
+                if ((left.type === 'MemberExpression' || right.type === 'MemberExpression') && (left.type === 'Literal' || right.type === 'Literal')) {
+                    const member = right.type === 'MemberExpression' ? right : left;
+                    const literal = right.type === 'Literal' ? right : left;
+
+                    if (member.object.type !== 'MemberExpression' || member.object.object === undefined || member.object.object.name !== 'process') return;
+                    if (member.object.property.name !== 'env' && member.property.name !== 'NODE_ENV') return;
+
+
+                    const { value } = literal;
+                    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function
+                    const result = new Function(`return "${value}" ${operator} "${process.env.NODE_ENV}"`)();
+
+                    const block = sourceToAST('{}').body[0];
+
+                    /**
+                     * If the value was true then set the blocks body to the consequent
+                     * If the value was false and there is an alternate set the blocks body to the alternate
+                     * If there is not alternate remove the entire node
+                     */
+                    if (result) {
+                        block.body = node.consequent.body;
+                        return block;
+                    }
+
+                    if (result === false) {
+                        if (node.alternate && node.alternate.body) {
+                            block.body = node.alternate.body;
+                            return block;
+                        }
+
+                        this.remove();
+                    }
+                }
+            }
+
+            return node;
         }
     });
 
@@ -135,30 +143,41 @@ function parseExports(resolvedSource, currentPath, id, resolver) {
     return walkAndParse(resolvedAST, currentPath, resolver);
 }
 
+/**
+ * Converts all the parsed modules back to JS and appends together.
+ * Converts the initalisation module and appends to the end.
+ */
+
 function generateCode(init, graph) {
     let modules = Object.keys(graph).map((key, value) => escodegen.generate(graph[key].exports)).join('\n');
     let initaliser = escodegen.generate(init);
     return `${modules}\n${initaliser}`;
 }
 
-const start = process.hrtime();
+function compress(code) {
+    if (process.env.NODE_ENV === 'production') {
+        return UglifyJS.minify(iifeTemplate(code)).code;
+    }
 
-function bundler(entryPoint) {
-    const ROOT_PATH = `${process.cwd()}/demo/`;
-    const PATH = `${ROOT_PATH}/a.js`;
+    return code;
+}
+
+function bundler(entryPoint, out) {
+    const start = process.hrtime();
+
+    const ROOT_PATH = `${path.dirname(`${process.cwd()}${entryPoint}`)}/`;
+    const PATH = `${process.cwd()}${entryPoint}`;
     const resolver = new Resolver(ROOT_PATH);
     const init = fs.readFileSync(require.resolve(PATH), 'UTF-8');
     const initalAST = sourceToAST(init);
     const parsedIntialAST = walkAndParse(initalAST, ROOT_PATH, resolver);
     const code = generateCode(parsedIntialAST, GRAPH);
+    let result = compress(iifeTemplate(code));
 
-    return iifeTemplate(code);
+    fs.writeFileSync(out, result, 'UTF-8');
 
-   
+    const end = process.hrtime(start);
+    console.log(`Took: ${end[0]}s ${end[1] / 1000000}ms`);
 }
 
-const code = bundler('');
-fs.writeFileSync(`${__dirname}/generated.js`, code, 'UTF-8')
-
-const end = process.hrtime(start);
-console.log(`Took: ${end[0]}s ${end[1] / 1000000}ms`);
+bundler('/demo/a.js', `${__dirname}/generated.js`);

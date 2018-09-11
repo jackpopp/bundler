@@ -2,11 +2,15 @@
 
 ## How does it work
 
+*Source*: https://github.com/jackpopp/bundler/blob/master/src/index.js
+
 The bundler begins by reading the initalisaton JS file and converting this to an Abstract Syntax Tree (AST) following the ecmascript 2018 specification (https://www.ecma-international.org/ecma-262/9.0/index.html#Title).
 To parse the inital source file to an AST the Acorn module is used, the resultant AST follows the estree implemention of the spec which can be found here (https://github.com/estree/estree).
 Using the speification we can figure out which nodes we want to look for and modify in order to bundle all our code together.
-We'll take the AST and make use of one of Acorns modules called walk, the walk module allows us to recurce the tree and visit any node invoking a callback when we visit it.
+We'll take the AST and we'll use estraverse to travservse the nodes, we'll use the replace function to visit each node check the type and modify, replace or remove.
 To do this we pass an object with a property with the name of the node type we want to visit, this takes a callback which will have parameter containing the node we visiting.
+
+### Visiting nodes
 
 For supporting the common JS require hook we will need to visit the **CallExpression** node, since this expression denotes when a function is called.
 An example of this would be:
@@ -29,13 +33,17 @@ Literals are static expressions within the source code, they are static values d
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#Literals
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#String_literals
 
+### Resolving modules
 
+### Wrapping and recursively parsing
+
+### Conditional bundling with NODE_ENV
+
+### Code generation
 
 ## TODO
 
 - ES Module - http://exploringjs.com/es6/ch_modules.html#sec_overview-modules
-- Fix horrible path generation
-- Support node modules
 - Use proper graph
 - Try code splitting
 - Scope hoisting
