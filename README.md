@@ -35,11 +35,19 @@ https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#
 
 ### Resolving modules
 
+tbc
+
 ### Wrapping and recursively parsing
+
+tbc
 
 ### Conditional bundling with NODE_ENV
 
+tbc
+
 ### Code generation
+
+tbc
 
 ## TODO
 
