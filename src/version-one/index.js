@@ -1,15 +1,15 @@
 const acorn = require('acorn');
 const path = require('path');
-const estraverse = require('estraverse');
 const fs = require('fs');
+const estraverse = require('estraverse');
 const md5 = require('md5');
 const escodegen = require('escodegen');
 const UglifyJS = require('uglify-es');
 
 const Resolver = require('./resolver');
 
-const resolvedModules = {};
-const GRAPH = {};
+const cacheModuleFile = {};
+const MODULES = {};
 
 function cjsTemplate(id, source) {
     return `const require_${id} = (function() { 
@@ -28,15 +28,13 @@ function iifeTemplate(source) {
 
 function sourceToAST(source) {
     return acorn.parse(source, {
-        ecmaVersion: 2018,
-        locations: false
+        ecmaVersion: 2018
     });
 }
 
 // root path should be where the bundler was invoked from
 // source path should be where the inital file was loaded from
 function walkAndParse(ast, currentPath, resolver) {
-
     estraverse.replace(ast, {
         enter(node) {
             if (node.type === 'CallExpression') {
@@ -45,8 +43,8 @@ function walkAndParse(ast, currentPath, resolver) {
                     const { fullPath, newResolutionPath} = resolver.resolvePath(modulePath, currentPath);
     
                     let resolved
-                    if (resolvedModules[fullPath]) {
-                        resolved = resolvedModules[fullPath];
+                    if (cacheModuleFile[fullPath]) {
+                        resolved = cacheModuleFile[fullPath];
                     } else {
                         /*
                             if full path is undefined then its probably a native node module
@@ -55,16 +53,16 @@ function walkAndParse(ast, currentPath, resolver) {
                         */
                         if (fullPath === undefined) {
                             resolved = require(modulePath).toString();
-                            resolvedModules[modulePath] = resolved;
-                            return
+                            cacheModuleFile[modulePath] = resolved;
                         }
 
                         resolved = fs.readFileSync(require.resolve(fullPath), 'UTF-8');
-                        resolvedModules[fullPath] = resolved;
+                        cacheModuleFile[fullPath] = resolved;
                     }
 
                     const id = md5(resolved);
-                    const edge = {
+                    
+                    const vertex = {
                         node,
                         resolvedModule: resolved,
                         modulePath: modulePath,
@@ -75,8 +73,8 @@ function walkAndParse(ast, currentPath, resolver) {
 
                     node.callee.name = `require_${id}`;
 
-                    if (GRAPH[id] === undefined) {
-                        GRAPH[id] = (edge);
+                    if (MODULES[id] === undefined) {
+                        MODULES[id] = (vertex);
                     }
                 }
             }
@@ -148,10 +146,10 @@ function parseExports(resolvedSource, currentPath, id, resolver) {
  * Converts the initalisation module and appends to the end.
  */
 
-function generateCode(init, graph) {
-    let modules = Object.keys(graph).map((key, value) => escodegen.generate(graph[key].exports)).join('\n');
+function generateCode(init, modules) {
+    let generatedCode = Object.keys(modules).map((key, value) => escodegen.generate(modules[key].exports)).join('\n');
     let initaliser = escodegen.generate(init);
-    return `${modules}\n${initaliser}`;
+    return `${generatedCode}\n${initaliser}`;
 }
 
 function compress(code) {
@@ -164,20 +162,21 @@ function compress(code) {
 
 function bundler(entryPoint, out) {
     const start = process.hrtime();
-
-    const ROOT_PATH = `${path.dirname(`${process.cwd()}${entryPoint}`)}/`;
-    const PATH = `${process.cwd()}${entryPoint}`;
-    const resolver = new Resolver(ROOT_PATH);
-    const init = fs.readFileSync(require.resolve(PATH), 'UTF-8');
+    
+    const ROOT_PATH = `${path.dirname(`${process.cwd()}/${entryPoint}`)}/`;
+    const MODULE_PATH = `${process.cwd()}/${entryPoint}`;
+    const OUT_PATH = `${process.cwd()}/${out}`;
+    const init = fs.readFileSync(MODULE_PATH, 'UTF-8');
     const initalAST = sourceToAST(init);
+    const resolver = new Resolver(ROOT_PATH);
     const parsedIntialAST = walkAndParse(initalAST, ROOT_PATH, resolver);
-    const code = generateCode(parsedIntialAST, GRAPH);
+    const code = generateCode(parsedIntialAST, MODULES);
     let result = compress(iifeTemplate(code));
 
-    fs.writeFileSync(out, result, 'UTF-8');
+    fs.writeFileSync(OUT_PATH, result, 'UTF-8');
 
     const end = process.hrtime(start);
     console.log(`Took: ${end[0]}s ${end[1] / 1000000}ms`);
 }
 
-bundler('/demo/a.js', `${__dirname}/generated.js`);
+bundler('demo/index.js', `generated.js`);
