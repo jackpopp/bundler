@@ -6,7 +6,7 @@ const el = React.createElement('a', {
     href: 'hello'
 }, 'This is a link');
 
-console.log(ReactDOM.render(el, document.querySelector('#el')));
+console.log(ReactDOM.render(el, document.querySelector('#element')));
 
 function helloWorld() {
     console.log('Hello World');

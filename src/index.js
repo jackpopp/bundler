@@ -8,10 +8,9 @@ const UglifyJS = require('uglify-es');
 
 const Resolver = require('./resolver');
 
-const cacheModuleFile = {};
 const MODULES = {};
 
-function cjsTemplate(id, source) {
+function commonJSWrapperTemplate(id, source) {
     return `const require_${id} = (function() { 
         const module = { exports: {}};
         const exports = module.exports;
@@ -40,42 +39,23 @@ function walkAndParse(ast, currentPath, resolver) {
             if (node.type === 'CallExpression') {
                 if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
                     const modulePath = node.arguments[0].value;
-                    const { fullPath, newResolutionPath} = resolver.resolvePath(modulePath, currentPath);
-    
-                    let resolved
-                    if (cacheModuleFile[fullPath]) {
-                        resolved = cacheModuleFile[fullPath];
-                    } else {
-                        /*
-                            if full path is undefined then its probably a native node module
-                            maybe use this shim  - https://github.com/webpack/node-libs-browser
-                            ultra hack for now, remove this
-                        */
-                        if (fullPath === undefined) {
-                            resolved = require(modulePath).toString();
-                            cacheModuleFile[modulePath] = resolved;
-                        }
+                    const { fullPath, newResolutionPath } = resolver.resolvePath(modulePath, currentPath);
 
-                        resolved = fs.readFileSync(require.resolve(fullPath), 'UTF-8');
-                        cacheModuleFile[fullPath] = resolved;
-                    }
+                    let resolved = fs.readFileSync(fullPath, 'UTF-8');
 
                     const id = md5(resolved);
                     
-                    const vertex = {
+                    const module = {
                         node,
                         resolvedModule: resolved,
                         modulePath: modulePath,
                         fullPath: fullPath,
-                        exports: parseExports(resolved, newResolutionPath, id, resolver),
+                        exports: wrapSourceAndParse(resolved, newResolutionPath, id, resolver),
                         id: id
                     }
 
                     node.callee.name = `require_${id}`;
-
-                    if (MODULES[id] === undefined) {
-                        MODULES[id] = (vertex);
-                    }
+                    MODULES[id] = module;
                 }
             }
 
@@ -135,8 +115,8 @@ function walkAndParse(ast, currentPath, resolver) {
  * Walks the AST and parers any call expressions for require function calls
  */
 
-function parseExports(resolvedSource, currentPath, id, resolver) {
-    const wrappedSource = cjsTemplate(id, resolvedSource);
+function wrapSourceAndParse(resolvedSource, currentPath, id, resolver) {
+    const wrappedSource = commonJSWrapperTemplate(id, resolvedSource);
     const resolvedAST = sourceToAST(wrappedSource);
     return walkAndParse(resolvedAST, currentPath, resolver);
 }
@@ -147,7 +127,7 @@ function parseExports(resolvedSource, currentPath, id, resolver) {
  */
 
 function generateCode(init, modules) {
-    let generatedCode = Object.keys(modules).map((key, value) => escodegen.generate(modules[key].exports)).join('\n');
+    let generatedCode = Object.values(modules).map(value => escodegen.generate(value.exports)).join('');
     let initaliser = escodegen.generate(init);
     return `${generatedCode}\n${initaliser}`;
 }

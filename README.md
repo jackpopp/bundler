@@ -47,7 +47,10 @@ In our demo directory we'll set up some require calls and module.export definiti
 ```javascript
 // demo/index.js
 
-var app = require('./app');
+const app = require('./app');
+const partition = require('lodash/partition');
+
+require('./folder/something.js');
 app();
 
 const currentTime = require('./utils/currentTime.js');
@@ -57,10 +60,21 @@ for (let i = 0; i < 10; i++) {
     require('./app')();
 }
 
+console.log(partition([1, 2, 3, 4], n => n % 2));
 ```
 
 ```javascript
 // demo/app.js
+
+const React = require('react');
+const ReactDOM = require('react-dom');
+const somethingElse = require('./folder/something-else.js');
+
+const el = React.createElement('a', {
+    href: 'hello'
+}, 'This is a link');
+
+console.log(ReactDOM.render(el, document.querySelector('#element')));
 
 function helloWorld() {
     console.log('Hello World');
@@ -75,6 +89,24 @@ module.exports = helloWorld;
 
 module.exports = () => {
     console.log(`Date: ${new Date()}`);
+}
+```
+
+```javascript
+// demo/folder/somthing.js
+function something() {
+    console.log('something');
+}
+
+module.exports = something;
+```
+
+```javascript
+// demo/folder/somthing-else.js
+const something = require('./something.js');
+
+module.exports = {
+    hello: 'world'
 }
 ```
 
@@ -230,7 +262,7 @@ When we visit this node we will be given the node object along with its properti
 https://github.com/estree/estree/blob/master/es5.md#callexpression
 
 ```javascript
-function walkAndParse(ast, currentPath, resolver) {
+function walkAndParse(ast, currentPath) {
 
     estraverse.replace(ast, {
         enter(node) {
@@ -258,7 +290,7 @@ https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#String_literals
 
 ```javascript
-function walkAndParse(ast, currentPath, resolver) {
+function walkAndParse(ast, currentPath) {
 
     estraverse.replace(ast, {
         enter(node) {
@@ -351,7 +383,7 @@ module.exports = class Resolver {
 ```
 
 Next up we'll add the logic for all the different possible module paths, we'll use an if statement to test if the path is relative otherwise assume its a node module.
-First we check if there module starts with `./` or `../` if it does then we expect its a relative path, set the `fullPath` to the current path with the module path from the require argument appended
+First we check if there module starts with `./` or `../` if it does then we expect its a relative path, set the `fullPath` to the current path with the module path from the require argument appended.
 
 The node module resolution is a little more complex, the require call could be targeting a directory or a file within a directory. Since the require statements do not mandate a file extension we need to check if it's a directory or a file that is being referenced. If it's a directory then we must also try and load the package.json in order to check if a main entry point has been defined, if it has we use it and if it hasnt we default to `index.js`. Next we'll append a `.js` to the `modulePath` as a variable called `nodeModulePathWithExtension` if it doesnt have one and check if it's a valid file, if it is then assign `fullPath` to `nodeModulePathWithExtension`.
 
@@ -363,6 +395,7 @@ resolvePath(modulePath, currentPath) {
         let fullPath;
 
         if ((modulePath.startsWith('./') || modulePath.startsWith('../'))) {
+            const nodeModulePathWithExtension = modulePath.endsWith('.js') ? modulePath : `${modulePath}.js`;
             fullPath = `${(currentPath)}${modulePath}`;
         } else {
             const nodeModulePath = `${this.rootPath}node_modules/${modulePath}`;
@@ -388,15 +421,199 @@ resolvePath(modulePath, currentPath) {
     }
 ```
 
+Now that we have created our resolver we need to a create a new instance of the resolver and pass this is to the `walkAndParse` function.
+Update the bundler as follows:
+
+```javascript
+const resolver = new Resolver(ROOT_PATH);
+const parsedIntialAST = walkAndParse(initalAST, ROOT_PATH, resolver);
+```
+
+Then update the `walkAndParse` function:
+
+```javascript
+function walkAndParse(ast, currentPath, resolver) {
+    estraverse.replace(ast, {
+        enter(node) {
+            if (node.type === 'CallExpression') {
+                if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
+                    const modulePath = node.arguments[0].value;
+                    const { fullPath, newResolutionPath } = resolver.resolvePath(modulePath, currentPath);
+```
+
+Next we want to try and read in the resolved file path so that it can be bundled in the generated file and so we can parse this resolved module for its common JS require calls.
+We can achieve this by using the fs module to read in the file, we'll be doing this syncronuously for brevity but it could be possible to chain these calls and do then asyncrounously for improved performance.
+
+Update the code after the resolvePath call to add in:
+
+```javascript
+let resolved = fs.readFileSync(fullPath, 'UTF-8');
+```
+
+Now that we have loaded in a new module source file we need to be able to make sure any code that has been exported in the source file is returned and be used by the require call or anything the require call is assigned to.  
+
+// maybe we'll remove this bit
+One edge case we may see here is if the resolved path returned is undefined a reason for this may be it a native node module such as `stream` has been required. In these cases you could
+fall back to using one of the browser based implementations such as https://github.com/webpack/node-libs-browser, for now in our cases with front end based projects we wont run in to these problems.
+
 ### Wrapping and recursively parsing
 
-tbc
+If we look at our `index.js` file we can see that the first require call is in reference to `app.js`, the `app.js` file exports a function called `helloWorld` and in the `index.js` file this is assigned to the constant variable `app` within `index.js`. 
 
-### Conditional bundling with NODE_ENV
+```javascript
+// index.js
+const app = require('./app');
+```
 
-tbc
+```javascript
+// app.js
+function helloWorld() {
+    console.log('Hello World');
+    console.log(somethingElse);
+}
+
+module.exports = helloWorld;
+```
+
+We would therefore expect once the files are bunlded into a single generated file that we would be able to execute the `app` variable and this would execute a reference to the `helloWorld` function. As the common JS specification mentions we should be able to references any values exported with both `module.exports` and `exports` and both those should be able to export any primitive data type. Finally we want to make sure that everything within each modules scope remains within its scope and does not leak in to the global scope of the file. 
+
+In order to achieve this we can borrow from the NodeJS implementation of requiring modules, when a module is requires is it  wrapped in a function with a number of arguments such as exports, module and __dirname. For more information you can check out https://nodejs.org/api/modules.html.
+
+In our implementation we will wrap each of our source files in a function that is assigned to a value of require_HASH_ID where HASH_ID is an md5 has of the source file. On top of this we need to create an inital `module` variable that references an object with an `exports` object property and and `exports` property which references the `module.exports` value, we also need to return the `module.exports`. Finally we can then replace the original call expression's node name with this require_HASH_ID value and the reference to the required files source will be completed.
+
+The template for this wrapped source can be added to our index.js file as a function with a `source` parameter like the following:
+
+```javascript
+function commonJSWrapperTemplate(id, source) {
+    return `const require_${id} = (function() { 
+        const module = { exports: {}};
+        const exports = module.exports;
+    
+        ${source}
+        
+        return module.exports;
+    });`;
+}
+```
+
+Now that we have our common JS wrapper template we can go back to our CallExpression visitor to wrap the source code and continue the recursive search for more require call expressions that need to be resolved, wrapped and bundled. Lets update the vistor so that we create the hash id, create a module object that references the current AST node, paths, id and the resolved module source. We will also add a reference to a property called exports, which will invoke a function called `wrapSourceAndParse`. The `wrapSourceAndParse` function will wrap the resolved module in the common JS wrapper, convert the source into an AST and then call `walkAndParse` on this AST. The `walkAndParse` function will return the AST as the end of the function so this will then be assigned to the `exports` propertly of the `module` object we have created. 
+
+Next we'll rename the CallExpression from `require` to require_HASH_ID as mentioned earlier and we will push the `module` object we've created in to a global `MODULES` object that we'll define at the top of our bundler. Later on we will interate over the `MODULES` object to generate our final bundle.
+
+```javascript
+const modulePath = node.arguments[0].value;
+const { fullPath, newResolutionPath } = resolver.resolvePath(modulePath, currentPath);
+
+let resolved = fs.readFileSync(fullPath, 'UTF-8');
+
+const id = md5(resolved);
+
+const module = {
+    node,
+    resolvedModule: resolved,
+    modulePath: modulePath,
+    fullPath: fullPath,
+    exports: wrapSourceAndParse(resolved, newResolutionPath, id, resolver),
+    id: id
+}
+
+node.callee.name = `require_${id}`;
+MODULES[id] = module;
+```
+
+Now that we are able to resolve all our modules from our inital file and create a set of parsed AST we want to be able to generate our new bundled code, which we'll do in the next section.
 
 ### Code generation
+
+Now that we've done quite a lot of processing lets actually generate something from all our hard word, the generated code is actually going to fail to execute which we will shortly see. But we'll have *something* that is generated from all our hard work and we'll stick a hack in to see the fruits of our labour and then go and imiediately fix it afterwards in the *Conditional bundling with NODE_ENV*. 
+
+Generating the final code output is surpisingly easy we'll make use of a module called escodegen which stands for Ecma Script Code Generation, this module allows you to pass in an ESTREE compatible AST and will output source code from the AST. We will iterate over the resolved modules we have in the `MODULE` object, next we'll generate the initaliser code. Finally we'll wrap the whole thing in an imediately invoked function execution (IIFE) so that we keep everything in our bundle out of the global scope and dont accidentally pollute any other code in the global scope and make any other code in the global scope does not pollute our code. 
+Firstly we'll update our bundler function, we'll add a call to a function called generate code which takes our `parsedIntialAST` and `MODULES` object. Then an `iifeTemplate` function which takes the resultant code of `parsedIntialAST` call and finally we'll write out the result with the `fs` module to the path defined at `OUT_PATH`.
+
+```javascript
+function bundler(entryPoint, out) {
+    const ROOT_PATH = `${path.dirname(`${process.cwd()}/${entryPoint}`)}/`;
+    const MODULE_PATH = `${process.cwd()}/${entryPoint}`;
+    const OUT_PATH = `${process.cwd()}/${out}`;
+    const init = fs.readFileSync(MODULE_PATH, 'UTF-8');
+    const initalAST = sourceToAST(init);
+    const resolver = new Resolver(ROOT_PATH);
+    const parsedIntialAST = walkAndParse(initalAST, ROOT_PATH, resolver);
+    const code = generateCode(parsedIntialAST, MODULES);
+    const result = iifeTemplate(code);
+
+    fs.writeFileSync(OUT_PATH, result, 'UTF-8');
+}
+```
+
+Next up we'll create the `generateCode` function, as mentioned earlier this will iterate over the ASTs to generate our output file.
+We'll iterate over the modules using `Object.values` to generate an array of values, then using map we'll create an array of generated source code with the exports value of module. Then we'll create a single string by using join, finally we need to convert the `init` file back to source and we'll join all code using using a multiline string with the init file going last.
+
+```javascript
+function generateCode(init, modules) {
+    let generatedCode = Object.values(modules).map(value => escodegen.generate(value.exports)).join('\n');
+    let initaliser = escodegen.generate(init);
+    return `${generatedCode}\n${initaliser}`;
+}
+```
+
+Now that we've generated our generated source file we want to wrap it in the IIFE we mentioned earlier, we'll create a template function like we did with the common JS wrapper.
+
+```javascript
+function iifeTemplate(source) {
+    return `(function() {${source}}())`;
+}
+```
+
+We've now got our working bundler the final thing to do is invoke the bundler, so lets add a call to the bundler with our entry point and out path at the end of the index file.
+
+```javascript
+bundler('demo/index.js', `generated.js`);
+```
+
+Now from the terminal we should be able to run the bundler with the following command:
+
+```bash
+node src/index.js
+```
+
+If everything goes to plan we should not see any errors and we should see a generated JS file in the root of our directory.
+Lets create a little demo html page to test our bundle, create a new file and add the following.
+
+```html
+<div id="element"></div>
+<script src="./generated.js"></script>
+```
+
+Now if we try and visit this page we'll see that no react element has actually been renderered, if we check the console we'll see the following error.
+
+```javascript
+Uncaught ReferenceError: process is not defined
+```
+
+This is kinda weird, the reason for this is that many modules have a developement and production build and will use current process to try and only bundle the correct version. Different bundlers such as webpack and rollup support the ability to conditionally require modules based on the current `NODE_ENV` defined as an environment variable at bundle time. Lets take react for an example if we look at the index file we can see the following: 
+
+```javascript
+if (process.env.NODE_ENV === 'production') {
+  module.exports = require('./cjs/react.production.min.js');
+} else {
+  module.exports = require('./cjs/react.development.js');
+}
+```
+
+At bundle time the bundler will look for a pre-compiled versions of react which is either a development or production flavour based on the `NODE_ENV` value in the defined environment variables. 
+
+Lets add a quick hack to see our generated code to run then we can implement conditional bundling in the next section. Update the `iifeTemplate` to add a process object at the top most scope of the generate file which contains a `env` object with `NODE_ENV` property set to `development`.
+
+```javascript
+function iifeTemplate(source) {
+    return `(function() {const process = {env: { NODE_ENV: 'development' }};${source}}())`;
+}
+```
+
+How if we reload the the testing page we created we should see that the react code had run and rendered a link and we should see a bunch of console logs with the output of our exported modules and function executions. Now that we can see that our bundle works as expected lets revert the change and look in to implementing the conditional bundling functionality.
+
+### Conditional bundling with NODE_ENV
 
 tbc
 

@@ -15,7 +15,8 @@ module.exports = class Resolver {
          */
 
         if ((modulePath.startsWith('./') || modulePath.startsWith('../'))) {
-            fullPath = `${(currentPath)}${modulePath}`;
+            const nodeModulePathWithExtension = modulePath.endsWith('.js') ? modulePath : `${modulePath}.js`;
+            fullPath = `${(currentPath)}${nodeModulePathWithExtension}`;
         } else {
             /**
              * If its not a realtive path then we're assuming its a node module
