@@ -615,16 +615,122 @@ How if we reload the the testing page we created we should see that the react co
 
 ### Conditional bundling with NODE_ENV
 
-tbc
+In order to support conditional bundling we will need to traverse each AST and process any if statements looking for references to `process.env.NODE_ENV` and statically determine if the test within the if statement evaluates to true or false. In order to figure out what kinds of node properties we will need to work with we can again look at the specification of the estree nodes https://github.com/estree/estree/blob/master/es5.md#ifstatement. From this we can determine there will be test node where the if statements test exists, a consequent block statement node containing some code to be executed and an optional alternate statement which could be an block statement or another if statement. For our implementation we will check for an alternate statement but only support the block statement. 
 
-## TODO
+Starting with the test node we need to check if it is a binary expression for example `1 == 1` is a binary expression, if this is the case it should have a left, right and operator node which we can evaluate. 
 
-- ES Module - http://exploringjs.com/es6/ch_modules.html#sec_overview-modules
-- Use proper graph
-- Try code splitting
-- Scope hoisting
+// this bit seems a bit confusing maybe needs some editing
 
-References:
+Next we want to find a member expression on either sides of the test this is node that represents accessing object properties using dot notation eg `myproperty.propery` or square bracket access eg `myproperty['property']`. Viewing the estree specification https://github.com/estree/estree/blob/master/es5.md#memberexpression we can see there are `object` and `property` values and we can use these to determine if the test is checking `process.env.NODE_ENV`. The `object` value refers to the object that is being accessed and the `property` is referencing the property within that object, which on the surface is quite straightforward. The order in which the these values are evaluated is a little confusing, when accessing a propery that is two levels deep there will be nested member expressions. The nesting works from right to left so the top level member expression will in fact have `property` referenced to the final property referenced and recursing the `object` values will work backwards to the starting object. For example with `process.env.NODE_ENV` the node would look like:
+
+```
+"expression": {
+    "type": "MemberExpression",
+    "start": 0,
+    "end": 20,
+    "object": {
+        "type": "MemberExpression",
+        "start": 0,
+        "end": 11,
+        "object": {
+            "type": "Identifier",
+            "start": 0,
+            "end": 7,
+            "name": "process"
+        },
+        "property": {
+            "type": "Identifier",
+            "start": 8,
+            "end": 11,
+            "name": "env"
+        },
+        "computed": false
+    },
+    "property": {
+        "type": "Identifier",
+        "start": 12,
+        "end": 20,
+        "name": "NODE_ENV"
+    },
+    "computed": false
+}
+```
+
+As you can see from the the JSON representation of the node, the first property value is `NODE_ENV` not `process`, the `process` reference is in fact within the next MemberExpression node which is within the object value. Lets put all these checks together as code so we end up with some functionality that can determine if we has a test within an if statement that is evaluating the `NODE_ENV` environment variable against a literal value.
+
+```javascript
+if (node.type === 'IfStatement') {
+    // This allows us to generate different bundles based on the NODE_ENV value, allowing develpoment and production builds
+    // needs to be a binary expression
+    if (node.test.type !== 'BinaryExpression') return;
+    // check if either left or right are memeber expressions that look for the node env
+    // check if either the left or right string literal, if it is lets build and compare the two
+    const { left, right, operator } = node.test;
+
+    if ((left.type === 'MemberExpression' || right.type === 'MemberExpression') && (left.type === 'Literal' || right.type === 'Literal')) {
+        // the member expression and literal can be on either side of the test so figure that out and assign to variables
+        const member = right.type === 'MemberExpression' ? right : left;
+        const literal = right.type === 'Literal' ? right : left;
+
+        // figure out if the member expression is actually referenceing process.env.NODE_ENV if not return early
+        if (member.object.type !== 'MemberExpression' || member.object.object === undefined || member.object.object.name !== 'process') return;
+        if (member.object.property.name !== 'env' && member.property.name !== 'NODE_ENV') return;
+
+        // evaluate test here
+    }
+}
+```
+
+In the code above there is some annoations for each section, we check if its a BinaryExpression, we check the test values are MemberExpression and Literal. Then we check the MemberExpression is referencing the current processes' envionrment variables and looking at the `NODE_ENV` envrinonment variables. If we get this far without returning then we want to run the if statements test, given that we dont actually have the source code at this point we need to reconstruct the if statements test and invoke it. We can achieve this using the Function class https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function to create a function at runtime that constructs a function that will evaluate and return the value of the test, we can then run it and assign it to a variable to check. After the NODE_ENV check add the following:
+
+```javascript
+const { value } = literal;
+const result = new Function(`return "${value}" ${operator} "${process.env.NODE_ENV}"`)();
+```
+
+Now that we have a result we want to replace the entire if statement with the block of code that should be there for example assuming that NODE_ENV was developement we would expect the following:
+
+```
+// from this
+if (process.env.NODE_ENV === 'production') {
+  module.exports = require('./cjs/react.production.min.js');
+} else {
+  module.exports = require('./cjs/react.development.js');
+}
+
+// to this 
+{
+  module.exports = require('./cjs/react.development.js');
+}
+```
+
+We also want to keep the curly braces (a BlockStatement) around the unit of code in order to maintain the scope, since ever block of code within curly braces has its own lexical scope.
+So to complete the functionality we are looking for we want to check the result of the test, if it evaluates to true we want to keep the consequent BlockStatement. If the test is false and there is an alternate BlockStatement then we want to keep this BlockStatement and if there is no alternate then we remove the entire node.
+
+```javascript
+const block = sourceToAST('{}').body[0];
+
+/**
+ * If the value was true then set the blocks body to the consequent
+ * If the value was false and there is an alternate set the blocks body to the alternate
+ * If there is not alternate remove the entire node
+ */
+if (result) {
+    block.body = node.consequent.body;
+    return block;
+}
+
+if (result === false) {
+    if (node.alternate && node.alternate.body) {
+        block.body = node.alternate.body;
+        return block;
+    }
+
+    this.remove();
+}
+```
+
+Some References:
 
 https://www.ecma-international.org/ecma-262/
 https://nodejs.org/docs/latest/api/modules.html#modules_the_module_object

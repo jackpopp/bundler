@@ -60,17 +60,19 @@ function walkAndParse(ast, currentPath, resolver) {
             }
 
             if (node.type === 'IfStatement') {
-                // This mod allows us to generate different bundles based on the NODE_ENV value, allowing develpoment and production builds
-                const { left, right, operator } = node.test;
+                // This allows us to generate different bundles based on the NODE_ENV value, allowing develpoment and production builds
                 // needs to be a binary expression
+                if (node.test.type !== 'BinaryExpression') return;
                 // check if either left or right are memeber expressions that look for the node env
                 // check if either the left or right string literal, if it is lets build and compare the two
-                if (node.test.type !== 'BinaryExpression') return;
+                const { left, right, operator } = node.test;
 
                 if ((left.type === 'MemberExpression' || right.type === 'MemberExpression') && (left.type === 'Literal' || right.type === 'Literal')) {
+                    // the member expression and literal can be on either side of the test so figure that out and assign to variables
                     const member = right.type === 'MemberExpression' ? right : left;
                     const literal = right.type === 'Literal' ? right : left;
 
+                    // figure out if the member expression is actually referenceing process.env.NODE_ENV if not return early
                     if (member.object.type !== 'MemberExpression' || member.object.object === undefined || member.object.object.name !== 'process') return;
                     if (member.object.property.name !== 'env' && member.property.name !== 'NODE_ENV') return;
 
@@ -79,6 +81,7 @@ function walkAndParse(ast, currentPath, resolver) {
                     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function
                     const result = new Function(`return "${value}" ${operator} "${process.env.NODE_ENV}"`)();
 
+                    // create a block scope in order to maintain the scope of consequent or alternate block that is executed
                     const block = sourceToAST('{}').body[0];
 
                     /**
