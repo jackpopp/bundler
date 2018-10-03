@@ -1,36 +1,35 @@
-# Javascript module bunder
+# Building a Javascript module bunder
 
-## How does it work
+## Introduction
 
 *Source*: https://github.com/jackpopp/bundler/blob/master/src/index.js
 
-A Javascript bundler is essentially a source to source compiler otherwise known as a transpiler. It takes Javascript source code, transforms it in someway and then outputs a different form of the source code. In our case we're taking the individual Javascript source files and bundling them together, rewriting specific pieces of code such as the require calls.
+A Javascript bundler is essentially a source to source compiler otherwise known as a transpiler. It takes Javascript source code, transforms it in someway and then outputs a different form of the source code. In our case we're taking the individual Javascript source files and bundling them together, rewriting specific pieces of code such as the require calls. Most bundlers will build a dependecy graph using a graph data structure (https://en.wikipedia.org/wiki/Dependency_graph), which can be used for generating the JS bundle, visualisation and code spliting. In this bundler we will forgo a fully directed dependency graph for brevity, we will also resolves modules syncronously which will be slower but allow for simpler code.
 
 ### TL:DR
+The basic steps for bundling our modules are as follow:
 
 - Transform inital source code to AST
 - Traverse AST and detect require function calls
-- Resolve module using the require calls argument
+- Resolve module by processing call expressions with a callee named require
 - Wrap resolved module in common JS helper function
-- For each resolve module, generate an AST and recursively trasverse the AST
+- For each resolved module, generate an AST and recursively trasverse the AST
 - Add each modified AST to a module graph
 - Iterate over the ASTs converting to code using escodegen
 - Wrap in an immediately invoked function expression
 - Write bundle to file
 
-The bundler begins by reading the initalisation Javascript file and converting this to an Abstract Syntax Tree (AST) following the ecmascript 2018 specification (https://www.ecma-international.org/ecma-262/9.0/index.html#Title). 
+The bundler begins by reading the entry point JS file file and converting this to an Abstract Syntax Tree (AST) following the ecmascript 2018 specification (https://www.ecma-international.org/ecma-262/9.0/index.html#Title). 
 An AST is a tree representation of the source code with each node representing a construct in the language.
-To parse the inital source file to an AST the Acorn module is used, the resultant AST follows the estree implemention of the spec which can be found here (https://github.com/estree/estree).
-Using the speification we can figure out which nodes we want to look for and modify in order to bundle all our code together.
-We'll take the AST and we'll use estraverse to travservse the nodes, visiting each node checking the type, modifying, replacing or removing.
+To parse the inital source file to an AST we can use the Acorn, the resultant AST follows the estree implemention of the 2018 spec which can be found here (https://github.com/estree/estree).
+Using the specification we can figure out which nodes we want to look for and modify in order to bundle all our code together.
+We'll take the AST and we'll use estraverse to travservse the nodes, visiting each node checking the type then modifying, replacing or removing.
+This will need to happend recursively for all common JS require function calls that we fine.
 
 ### Initial Set up
 
-Create a directory called bundler within there create a demo directory for our demo project and a src directory for our bundler.
-Initalise a package.json in the root foler and the demo folder, we'll need a package.json in the demo directory to test bundling node modules.
-
-Create a directory called bundler for all our source code, in here add an src directory for the bundle source and demo directory for our demo project.
-In the demo project add we'll add an initalisation source file and a app file and in the src directory we'll add a main file
+Create a directory called bundler for all our source code, in here add an src directory for the bundler source and demo directory for our demo project.
+Initalise a package.json in the root folder and the demo folder, we'll need a package.json in the demo directory to test bundling node modules.
 
 ```bash
 mkdir -p bundle/src bundle/demo bundle/demo/utils
@@ -42,7 +41,7 @@ touch index.js app.js utils/currentTime.js
 npm init --yes
 ```
 
-In our demo directory we'll set up some require calls and module.export definitions to work again.
+In our demo directory we'll add some require function calls to modules within the src directory and modules that installed from npm to the node_modules directory.
 
 ```javascript
 // demo/index.js
@@ -112,7 +111,11 @@ module.exports = {
 
 ### Creating the inital AST
 
-In the src directory install **acorn** and require it in the index file, create a function that converts a source file to an AST.
+In the src directory install **acorn** and require it in the index file along with the path module, create a function that converts a source file to an AST.
+
+```bash
+npm install acorn
+```
 
 ```javascript
 const acorn = require('acorn');
@@ -142,6 +145,8 @@ bundler('demo/index.js', `generated.js`);
 We should see a nicely formatted object of all our paths with our variables as keys like so:
 
 ```bash
+node src/index.js
+
 {
   "ROOT_PATH": "/Users/dauser/Workspace/bundler/demo/",
   "MODULE_PATH": "/Users/dauser/Workspace/bundler/demo/index.js",
@@ -149,7 +154,7 @@ We should see a nicely formatted object of all our paths with our variables as k
 }
 ```
 
-Next up we need to pass our inital module to the function that generates the AST and we'll have our inital AST that we can start working with.
+Next up we need to pass our inital modules source to the function that generates the AST and we'll have our inital AST that we can start working with.
 So lets remove the `console.log` call that we added earlier and instead read in the file and pass the source to the function.
 
 ```javascript
@@ -163,7 +168,7 @@ function bundler(entryPoint, out) {
 }
 ```
 
-We've now got our inital AST which we can traverse to find all the `require` function calls, we'll process these in order to bundle all the modules and we'll need to do this recruively both with the inital tree and recursively traverse each module. 
+We've now got our inital AST which we can traverse it to find all the `require` function calls, we'll process these in order to bundle all the modules and we'll need to do this recruively for all modules that are resolved.
 
 ### Visiting nodes
 
@@ -177,9 +182,7 @@ An example of this would be:
 const myModule = require('./my-module'); // this is a call expression
 ```
 
-We'll take a simple example and convert that to an AST with the AST Explorer:
-
-// Image goes here
+We'll take the simple example above and convert that to an AST with the AST Explorer:
 
 ```json
 {
@@ -231,7 +234,7 @@ We'll take a simple example and convert that to an AST with the AST Explorer:
 }
 ```
 
-In the above source code we can see a multitude of node types, a source file generated from acorn will start with a root we start with a root node of type *Program* and a body property of type array. Within the body property we'll see all the top level nodes and each of these nodes will propertyies based on the types and these will be a mixture of other nodes or properties shared amongst all nodes. For example all nodes have a type (the node type), start (the starting character position) and end (the end character position). Any node with a block will have a body of new nodes and these are a new scope, there's a lot of stuff that may need to be kept track of although require calls are straightforward for the most part.
+In the above source code we can see a few node types, the tree generated from acorn will start with a root we start with a root node of type *Program* and a body property of type array. Within the body property we'll see all the top level nodes and each of these nodes will properties based on the types and these will be a mixture of other nodes or properties shared amongst all nodes. For example all nodes have a type (the node type), start (the starting character position) and end (the end character position). Any node with a block will have a body of new nodes and these are a new scope.
 
 In the above example we can see that we start with a *VariableDeclaration* this contains an array of declartions including *id* which is a reference to the identifier and a *init* property which is the initaliser of the variable declaration, this is basically what the variable will initalise to. 
 For example:
@@ -240,11 +243,11 @@ For example:
 const value = 1;
 ```
 
-In the above example the id is *value* and the initaliser is the literal value *1*, to figure out what all the node types are we can look at the specification that acorn follows for creating an AST. Acorn follows the estree specification which can be viewed on github at:
+The id is *value* and the initaliser is the literal value *1*, to figure out what all the node types are we can look at the specification that acorn follows for creating an AST. Acorn follows the estree specification which can be viewed on github at:
 https://github.com/estree/estree
 
 There is a specification which matches each release of the Ecmascript specificaion, such as es5, es2015 etc.
-We'll be using the *estraverse* module in order to traverse the AST and visit nodes that we will need to transform, so to begin install and require *estraverse*
+We'll be using the *estraverse* module in order to traverse the AST and visit nodes that we will need to transform, so to begin install and require estraverse.
 
 ```bash
 npm install estraverse
