@@ -4,7 +4,8 @@
 
 *Source*: https://github.com/jackpopp/bundler/blob/master/src/index.js
 
-A Javascript bundler is essentially a source to source compiler otherwise known as a transpiler. It takes Javascript source code, transforms it in someway and then outputs a different form of the source code. In our case we're taking the individual Javascript source files and bundling them together, rewriting specific pieces of code such as the require calls. Most bundlers will build a dependecy graph using a graph data structure (https://en.wikipedia.org/wiki/Dependency_graph), which can be used for generating the JS bundle, visualisation and code spliting. In this bundler we will forgo a fully directed dependency graph for brevity, we will also resolves modules syncronously which will be slower but allow for simpler code.
+A Javascript module bundler is a tool that allows you to bundle multiple Javascript modules together in to a single or multiple output files. Seperating your JS code into multiple modules and requiring shared modules from package management repositories is a common practice in modern web development. Javascript in the browser has not natively supported modules (although some browsers are starting to) and so module bundler is required to glue all the modules together. There's a bunch of different ways that modules can be bundled including AMD, Common JS and Import, the Javascript runtime Node popularised Common JS and we'll build our bundler to support this.
+The bundler takes Javascript source code, processes it, transforms it in someway and then outputs a different form of the source code. In our case we're taking the individual Javascript source files and bundling them together, rewriting specific pieces of code such as the require calls that the Common JS module format uses. Most bundlers will build a dependecy graph using a graph data structure (https://en.wikipedia.org/wiki/Dependency_graph), which can be used for generating the JS bundle, visualisation and code spliting. In this bundler we will forgo a fully directed dependency graph for brevity, we will also resolve modules syncronously which will be slower but allow for simpler code. 
 
 ### TL:DR
 The basic steps for bundling our modules are as follow:
@@ -24,15 +25,15 @@ An AST is a tree representation of the source code with each node representing a
 To parse the inital source file to an AST we can use the Acorn, the resultant AST follows the estree implemention of the 2018 spec which can be found here (https://github.com/estree/estree).
 Using the specification we can figure out which nodes we want to look for and modify in order to bundle all our code together.
 We'll take the AST and we'll use estraverse to travservse the nodes, visiting each node checking the type then modifying, replacing or removing.
-This will need to happend recursively for all common JS require function calls that we fine.
+This will need to happen recursively for all common JS require function calls that we find.
 
 ### Initial Set up
 
 Create a directory called bundler for all our source code, in here add an src directory for the bundler source and demo directory for our demo project.
-Initalise a package.json in the root folder and the demo folder, we'll need a package.json in the demo directory to test bundling node modules.
+Initalise a package.json in the root directory and the demo directory, we'll need a package.json in the demo directory to test bundling node modules.
 
 ```bash
-mkdir -p bundle/src bundle/demo bundle/demo/utils
+mkdir -p bundle/src bundle/demo bundle/demo/utils bundle/demo/folder
 cd bundle
 npm init --yes
 touch src/index.js
@@ -92,7 +93,7 @@ module.exports = () => {
 ```
 
 ```javascript
-// demo/folder/somthing.js
+// demo/folder/something.js
 function something() {
     console.log('something');
 }
@@ -128,7 +129,7 @@ function sourceToAST(source) {
 }
 ```
 
-Next create a bundler function that accepts arguments for an entry point and out file, we'll need to create variables for the root path, the inital module and the out file. We'll created these paths based on the current working directory by using the global process object. We'll also run the bundler initalisation and log out paths in the bundler to make sure everything look right.
+Next create a bundler function that accepts arguments for an entry point and out file, we'll need to create variables for the root path, the inital module and the out file. We'll create these paths based on the current working directory by using the global process object. We'll also run the bundler initalisation and log out paths in the bundler to make sure everything look right.
 
 ```javascript
 function bundler(entryPoint, out) {    
@@ -154,7 +155,7 @@ node src/index.js
 }
 ```
 
-Next up we need to pass our inital modules source to the function that generates the AST and we'll have our inital AST that we can start working with.
+Next up we need to pass our inital module's source to the function that generates the AST and we'll have our inital AST that we can start working with.
 So lets remove the `console.log` call that we added earlier and instead read in the file and pass the source to the function.
 
 ```javascript
@@ -168,14 +169,14 @@ function bundler(entryPoint, out) {
 }
 ```
 
-We've now got our inital AST which we can traverse it to find all the `require` function calls, we'll process these in order to bundle all the modules and we'll need to do this recruively for all modules that are resolved.
+We've now got our inital AST which we can traverse to find all the `require` function calls, we'll process these in order to bundle all the modules and we'll need to do this recruively for all modules that are resolved.
 
 ### Visiting nodes
 
-Lets take a look at the AST in order to get a better idea of how its structured and how we'll traverse it.
+Lets take a look at an AST in order to get a better idea of how it's structured and how we'll traverse it.
 We can use https://astexplorer.net/ to see a visualisation of the the source as an AST, we can open and close the different nodes and view all the different properties that different nodes contain.
 
-For supporting the common JS require hook we will need to visit the **CallExpression** node, since this expression denotes when a function is called.
+For supporting the common JS require call we will need to visit the **CallExpression** node, since this expression denotes when a function is called.
 An example of this would be:
 
 ```javascript
@@ -234,9 +235,9 @@ We'll take the simple example above and convert that to an AST with the AST Expl
 }
 ```
 
-In the above source code we can see a few node types, the tree generated from acorn will start with a root we start with a root node of type *Program* and a body property of type array. Within the body property we'll see all the top level nodes and each of these nodes will properties based on the types and these will be a mixture of other nodes or properties shared amongst all nodes. For example all nodes have a type (the node type), start (the starting character position) and end (the end character position). Any node with a block will have a body of new nodes and these are a new scope.
+In the above source code we can see a few node types, the tree generated from acorn will start with a root node of type *Program* and a body property which is an array of nodes. Within the body property we'll see all the top level nodes and each of these nodes will have properties based on the types and these will be a mixture of other nodes or properties that are common in all node types. For example all nodes have a type (the node type), start (the starting character position) and end (the end character position). Any node with a block will have a body of new nodes for example an if statement or an for loop, these are a new scope but you would need to manualy track this.
 
-In the above example we can see that we start with a *VariableDeclaration* this contains an array of declartions including *id* which is a reference to the identifier and a *init* property which is the initaliser of the variable declaration, this is basically what the variable will initalise to. 
+In the above example we can see that we start with a *VariableDeclaration* this contains a property named declariations which contains an array of declartion nodes. Each declaration node includes a number of properties including *id* which is a reference to the identifier and a *init* property which is the initaliser of the variable declaration, this is what the variable will initalise to. 
 For example:
 
 ```
@@ -246,8 +247,9 @@ const value = 1;
 The id is *value* and the initaliser is the literal value *1*, to figure out what all the node types are we can look at the specification that acorn follows for creating an AST. Acorn follows the estree specification which can be viewed on github at:
 https://github.com/estree/estree
 
-There is a specification which matches each release of the Ecmascript specificaion, such as es5, es2015 etc.
-We'll be using the *estraverse* module in order to traverse the AST and visit nodes that we will need to transform, so to begin install and require estraverse.
+There is a specification which matches each release of the Ecmascript specificaion, such as es5, es2015 etc that we can use to identify the different language constructs. 
+
+Now we'll visiting the nodes by traversing the tree, we'll be using the *estraverse* module in order to traverse the AST and visit nodes that we will need to transform, so to begin install and require estraverse.
 
 ```bash
 npm install estraverse
@@ -257,11 +259,12 @@ npm install estraverse
 const estraverse = require('estraverse');
 ```
 
-Next lets create a new function called *walkAndParse*, which will visit all the nodes in the AST and allow you to check each, conditionally making operations on each.
-This is called the visitor pattern - url here, we can visit each node do an operation either when we enter or leave the node, with the estraverse *replace* function we must return the node at the end of the function.
-The basic operation that we will be doing by walking each node is to look for the require calls, we'll then need to resolve the module and parse that module along with adding it to our list of modules. For each moduel that is resvoled from a source file we'd need to resurively call *walkAndParse* again, by the end process we should end up with a dependcy graph of all modules that can be bundled together.
+Next lets create a new function called *walkAndParse*, which will walk all the nodes in the AST and allow you to check each, conditionally making operations on each.
+ESTraverse uses the visitor pattern for this (https://en.wikipedia.org/wiki/Visitor_pattern), we can visit each node and conditionally perform an operation either when we enter or leave the node. We'll use the estraverse *replace* function as when we modify a node we want to replace it and we must return the node at the end of the function, replace will also allow us to remove nodes if we need to.
+The basic operation that we'll be performing when walking each node is to look for the require function calls, we'll then need to resolve the module and parse that module along with adding it to our list of resolved modules. For each module that is resvoled from a source file we'd need to call *walkAndParse* again, making use of recursion and by the end process we should end up with all modules to be bundled together.
 
-When we visit this node we will be given the node object along with its properties, these properties can be found by viewing the estree specification.
+When we visit a node we will be given a node object and can access the nodes properties, these properties can be found by viewing the estree specification.
+We call `estraverse.replace` and pass the AST as the first argument and an object with an enter property which has a function as its value. The enter property is a callback function that is executed each time a node is entered, the node object will then be pass as the first argument and we can add an if statement to check that the type is a `CallExpression`.
 https://github.com/estree/estree/blob/master/es5.md#callexpression
 
 ```javascript
@@ -279,18 +282,21 @@ function walkAndParse(ast, currentPath) {
 }
 ```
 
-First we want to check that the call expression callee type is an identifier, the identifier is the name of the function that is being called
-We need to check this is that you can have call expressions for an anonymous function which has no idientifier and instead would have a function expression.
-If it was a function expression then it could not be making a call to *require*.
+Once we've entered a node that is a call expression we want to check that the call expression callee type is an identifier, this tells us that a named function is being called.
+We need to check this as you also have a call expressions for an anonymous function which would not have an identifier as the callee and would instead have a FunctionExpression or ArrowFunctionExpression.
+If it was a function expression then it could not be making a call to *require* as there is no identifier to reference a defined function.
 https://github.com/estree/estree/blob/master/es5.md#identifier
 
-If the callee has no identifier for this node then we dont attempt to parse it, the walker will still visit its child nodes as there may be require call expressions further down that branch.
+If the callee has no identifier for this node then we dont attempt to parse it, the walker will still recursively visit its child nodes as there may be require call expressions further down that branch.
 
-If we do find that the callee has an identifier then we can check the identifer name and if this is *require*, then we now know we've hit an require call. 
+If we do find that the callee type is an identifier then we can check the identifer name and if this is *require*, then we now know we've visited an require function call. 
 The final step it to check if the require call has been given any arguments, we need a single argument and we exprect this to be a string literal.
-Literals are static expressions within the source code, they are static values defined within the code and are not variable.
+Literals are static expressions within the source code, they are static values defined within the code and are not variable, it needs to be a literal as we need a static value for the module path.
+For further information fo literals you can visit the following:
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#Literals
 https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_Types#String_literals
+
+Update the `walkAndParse` function as follows:
 
 ```javascript
 function walkAndParse(ast, currentPath) {
@@ -314,7 +320,7 @@ We most likely also want to check in the above test that the literal value is al
 ### Resolving modules
 
 Now that a require call expression with a literal expression has been identified, the module resolution needs to take place in order to find the correct path to the module.
-There are numerous ways that a module call be resolved using require and a some different cases for each, below are the three main ways we can resolve modules.
+There are numerous paths that can be used when requiring a module and different cases for using each, below are the three main path types.
 
 #### Absolute module path
 
