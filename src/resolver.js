@@ -8,6 +8,7 @@ module.exports = class Resolver {
 
     resolvePath(modulePath, currentPath) {
         let fullPath;
+        const modulePathWithExtension = modulePath.endsWith('.js') ? modulePath : `${modulePath}.js`;
     
         /**
          * Check if the module path starts with a relative file path, 
@@ -15,9 +16,16 @@ module.exports = class Resolver {
          */
 
         if ((modulePath.startsWith('./') || modulePath.startsWith('../'))) {
-            const nodeModulePathWithExtension = modulePath.endsWith('.js') ? modulePath : `${modulePath}.js`;
-            fullPath = `${(currentPath)}${nodeModulePathWithExtension}`;
-        } else {
+            fullPath = `${(currentPath)}${modulePathWithExtension}`;
+        }
+        /**
+         * Check if it starts with a forwardslash which indicates an absolute path, if this is the case then we have the full path already
+         * so set fullPath to the modulePath
+         */
+        else if (modulePath.startsWith('/')) {
+            fullPath = modulePathWithExtension;
+        }
+        else {
             /**
              * If its not a realtive path then we're assuming its a node module
              */

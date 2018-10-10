@@ -1,4 +1,4 @@
-const app = require('./app');
+const app = require('/Users/hannij11/Workspace/bundler/demo/app');
 const partition = require('lodash/partition');
 
 require('./folder/something.js');

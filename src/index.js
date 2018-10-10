@@ -21,8 +21,8 @@ function commonJSWrapperTemplate(id, source) {
     });`;
 }
 
-function iifeTemplate(source) {
-    return `(function() {${source}}())`;
+function iifeTemplate(output) {
+    return `(function() {${output}}())`;
 }
 
 function sourceToAST(source) {
@@ -37,12 +37,10 @@ function walkAndParse(ast, currentPath, resolver) {
     estraverse.replace(ast, {
         enter(node) {
             if (node.type === 'CallExpression') {
-                if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0] && node.arguments[0].type === 'Literal') {
+                if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments.length === 1 && node.arguments[0].type === 'Literal') {
                     const modulePath = node.arguments[0].value;
                     const { fullPath, newResolutionPath } = resolver.resolvePath(modulePath, currentPath);
-
-                    let resolved = fs.readFileSync(fullPath, 'UTF-8');
-
+                    const resolved = fs.readFileSync(fullPath, 'UTF-8');
                     const id = md5(resolved);
                     
                     const module = {
@@ -130,8 +128,8 @@ function wrapSourceAndParse(resolvedSource, currentPath, id, resolver) {
  */
 
 function generateCode(init, modules) {
-    let generatedCode = Object.values(modules).map(value => escodegen.generate(value.exports)).join('');
-    let initaliser = escodegen.generate(init);
+    const generatedCode = Object.values(modules).map(value => escodegen.generate(value.exports)).join('');
+    const initaliser = escodegen.generate(init);
     return `${generatedCode}\n${initaliser}`;
 }
 
@@ -153,8 +151,8 @@ function bundler(entryPoint, out) {
     const initalAST = sourceToAST(init);
     const resolver = new Resolver(ROOT_PATH);
     const parsedIntialAST = walkAndParse(initalAST, ROOT_PATH, resolver);
-    const code = generateCode(parsedIntialAST, MODULES);
-    let result = compress(iifeTemplate(code));
+    const output = generateCode(parsedIntialAST, MODULES);
+    const result = compress(iifeTemplate(output));
 
     fs.writeFileSync(OUT_PATH, result, 'UTF-8');
 
